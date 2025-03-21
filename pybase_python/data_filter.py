@@ -52,23 +52,19 @@ class Select:
         constraints = {}
 
         # Extract WHERE clause
-        where_match = re.search(r"\bWHERE\b\s+(.+?)(?=\s*\b(GROUP BY|HAVING|ORDER BY|LIMIT|$)\b)", 
-                                self.query, re.IGNORECASE)
+        where_match = re.search(r"(?i)WHERE\s+(.+?)(?=\s*(ORDER BY|GROUP BY|HAVING|LIMIT|$))", self.query, re.IGNORECASE)
         constraints["WHERE"] = where_match.group(1).strip() if where_match else None
 
         # Extract GROUP BY clause
-        group_by_match = re.search(r"\bGROUP BY\b\s+(.+?)(?=\s*\b(HAVING|ORDER BY|LIMIT|$)\b)", 
-                                   self.query, re.IGNORECASE)
+        group_by_match = re.search(r"(?i)GROUP BY\s+(.+?)(?=\s*(HAVING|LIMIT|$))", self.query, re.IGNORECASE)
         constraints["GROUP BY"] = group_by_match.group(1).strip() if group_by_match else None
 
         # Extract HAVING clause
-        having_match = re.search(r"\bHAVING\b\s+(.+?)(?=\s*\b(ORDER BY|LIMIT|$)\b)",  
-                                 self.query, re.IGNORECASE)
+        having_match = re.search(r"(?i)HAVING\s+(.+?)(?=\s*(LIMIT|$))", self.query, re.IGNORECASE)
         constraints["HAVING"] = having_match.group(1).strip() if having_match else None
 
         # Extract ORDER BY clause
-        order_by_match = re.search(r"\bORDER BY\b\s+(.+?)(?=\s*\b(LIMIT|$)\b)", 
-                                   self.query, re.IGNORECASE)
+        order_by_match = re.search(r"(?i)ORDER BY\s+(.+?)(?=\s*(GROUP BY|HAVING|LIMIT|$))",self.query, re.IGNORECASE)
         constraints["ORDER BY"] = order_by_match.group(1).strip() if order_by_match else None
 
         return constraints

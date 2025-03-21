@@ -19,8 +19,8 @@ void vigenere_cipher(char *text, const char *key, int decrypt) {
     }
 }
 
-void encrypt() {
-    FILE *file = fopen("tmp.txt", "r");
+void process_file(const char *filename, int decrypt) {
+    FILE *file = fopen(filename, "r");
     if (!file) {
         perror("Error opening file");
         return;
@@ -36,9 +36,9 @@ void encrypt() {
     text[strcspn(text, "\n")] = 0;
     fclose(file);
     
-    vigenere_cipher(text, key, 0);
+    vigenere_cipher(text, key, decrypt);
     
-    file = fopen("tmp.txt", "w");
+    file = fopen(filename, "w");
     if (!file) {
         perror("Error writing to file");
         return;
@@ -47,30 +47,10 @@ void encrypt() {
     fclose(file);
 }
 
-void decrypt() {
-    FILE *file = fopen("tmp.txt", "r");
-    if (!file) {
-        perror("Error opening file");
-        return;
-    }
-    
-    char key[MAX_LINE], text[MAX_LINE];
-    if (!fgets(key, MAX_LINE, file) || !fgets(text, MAX_LINE, file)) {
-        fclose(file);
-        perror("Error reading file");
-        return;
-    }
-    key[strcspn(key, "\n")] = 0;
-    text[strcspn(text, "\n")] = 0;
-    fclose(file);
-    
-    vigenere_cipher(text, key, 1);
-    
-    file = fopen("tmp.txt", "w");
-    if (!file) {
-        perror("Error writing to file");
-        return;
-    }
-    fprintf(file, "%s\n%s\n", key, text);
-    fclose(file);
+void encrypt(const char *filename) {
+    process_file(filename, 0);
+}
+
+void decrypt(const char *filename) {
+    process_file(filename, 1);
 }
