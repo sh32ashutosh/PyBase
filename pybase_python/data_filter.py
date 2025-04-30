@@ -71,7 +71,7 @@ class Select:
 
 
 # Example Usage
-q1 = "SELECT id, name, age, marks, department FROM student WHERE department = 'CS' AND marks > 80;"
+q1 = "select marks from students where class = 'Q' AND Department = 'CSE';"
 q2 = "SELECT department, AVG(marks) AS avg_marks FROM student GROUP BY department;"
 q3 = "SELECT department, AVG(marks) AS avg_marks FROM student GROUP BY department HAVING AVG(marks) > 75;"
 q4 = "SELECT id, name, age, marks, department FROM student ORDER BY marks DESC;"

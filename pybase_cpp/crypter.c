@@ -1,56 +1,85 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <windows.h>
 
-#define MAX_LINE 1024
+#define FILE_NAME "process.txt"
+#define MAX_LINE_LENGTH 1024
 
-void vigenere_cipher(char *text, const char *key, int decrypt) {
-    int text_len = strlen(text), key_len = strlen(key);
-    for (int i = 0, j = 0; i < text_len; i++) {
-        if (text[i] >= 'A' && text[i] <= 'Z') { 
-            text[i] = 'A' + (text[i] - 'A' + (decrypt ? -1 : 1) * (key[j % key_len] - 'A')) % 26;
-            if (text[i] < 'A') text[i] += 26;
-            j++;
-        } else if (text[i] >= 'a' && text[i] <= 'z') {
-            text[i] = 'a' + (text[i] - 'a' + (decrypt ? -1 : 1) * (key[j % key_len] - 'a')) % 26;
-            if (text[i] < 'a') text[i] += 26;
-            j++;
-        }
-    }
-}
+// Export functions for DLL
+__declspec(dllexport) void encrypt();
+__declspec(dllexport) void decrypt();
 
-void process_file(const char *filename, int decrypt) {
-    FILE *file = fopen(filename, "r");
+void encrypt() {
+    FILE *file = fopen(FILE_NAME, "r");
     if (!file) {
-        perror("Error opening file");
+        printf("Error: Could not open %s\n", FILE_NAME);
         return;
     }
-    
-    char key[MAX_LINE], text[MAX_LINE];
-    if (!fgets(key, MAX_LINE, file) || !fgets(text, MAX_LINE, file)) {
+
+    char buffer[MAX_LINE_LENGTH];
+    if (!fgets(buffer, sizeof(buffer), file)) {
+        printf("Error: File is empty or could not read\n");
         fclose(file);
-        perror("Error reading file");
         return;
     }
-    key[strcspn(key, "\n")] = 0;
-    text[strcspn(text, "\n")] = 0;
+
+    printf("First Line: %s", buffer); // Print the first line
+
+    // Read remaining content
+    FILE *temp = fopen("temp.txt", "w");
+    if (!temp) {
+        printf("Error: Could not create temp file\n");
+        fclose(file);
+        return;
+    }
+
+    while (fgets(buffer, sizeof(buffer), file)) {
+        fputs(buffer, temp);
+    }
+
     fclose(file);
-    
-    vigenere_cipher(text, key, decrypt);
-    
-    file = fopen(filename, "w");
+    fclose(temp);
+
+    // Replace original file with the modified file
+    remove(FILE_NAME);
+    rename("temp.txt", FILE_NAME);
+}
+
+void decrypt() {
+    FILE *file = fopen(FILE_NAME, "r");
     if (!file) {
-        perror("Error writing to file");
+        printf("Error: Could not open %s\n", FILE_NAME);
         return;
     }
-    fprintf(file, "%s\n%s\n", key, text);
+
+    char buffer[MAX_LINE_LENGTH];
+    if (!fgets(buffer, sizeof(buffer), file)) {
+        printf("Error: File is empty or could not read\n");
+        fclose(file);
+        return;
+    }
+
+    printf("First Line: %s", buffer); // Print the first line
+
+    // Read remaining content
+    FILE *temp = fopen(buffer, "r");
+    if (!temp) {
+        printf("Error: Could not create temp file\n");
+        fclose(file);
+        return;
+    }
+
+    while (fgets(buffer, sizeof(buffer), file)) {
+        fputs(buffer, temp);
+    }
+
     fclose(file);
+    fclose(temp);
+
+    // Replace original file with the modified file
+    remove(FILE_NAME);
+    rename("temp.txt", FILE_NAME);
 }
 
-void encrypt(const char *filename) {
-    process_file(filename, 0);
-}
 
-void decrypt(const char *filename) {
-    process_file(filename, 1);
-}

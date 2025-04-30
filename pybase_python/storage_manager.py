@@ -8,10 +8,8 @@ import threading
 import queue
 from crypter import encrypt, decrypt
 import multiprocessing
+from _database import *
 
-class NonExistantTableException(Exception):
-    def __init__(self):
-        super().__init__("Warning: the table does not exist")
 
 class SchemaManager:
     def __init__(self, database_name, encryption_level=5):
@@ -201,18 +199,18 @@ if __name__ == "__main__":
     schema_manager = SchemaManager("test_db")
     db_manager = DatabaseManager(schema_manager)
     
-    #schema_manager.add_table("student", ["id", "name", "age"], "id")
-    #schema_manager.add_table("children", ["child_id", "parent_id", "age"], "child_id", foreign_keys={"parent_id": "student.id", "age": "student.age"})
+    schema_manager.add_table("students", ["name", "city", "rollno"], "rollno")
+    schema_manager.add_table("children", ["child_id", "city", "age"], "child_id", foreign_keys={"city": "student.city"})
     
-    #for i in range(1, 1001):
-        #db_manager.insert_data("student", {"id": i, "name": f"Student_{i}", "age": random.randint(18, 25)})
-        #db_manager.save_database()
-        #db_manager.insert_data("children", {"child_id": i, "parent_id": random.randint(1, 100), "age": random.randint(1, 17)})
-        #db_manager.save_database()
+    for i in range(1, 101):
+        db_manager.insert_data("students", {"name": random.choice(["anumalik", "shakaal", "mogambo", "musa bhai"]),"city":random.choice(["delhi", "mumbai","kolkata" ]), "rollno": f"{i*100}"})
+        db_manager.save_database()
+        db_manager.insert_data("children", {"child_id": i, "age": random.randint(1, 17)})
+        db_manager.save_database()
     
-    # Use the multithreaded fetch_data method
-    student_data = db_manager.fetch_data("student")
+    # Use the multithreaded fetch_data method\
+    student_data = db_manager.fetch_data("students")
     children_data = db_manager.fetch_data("children")
-    print(f"Fetched {len(student_data['id'])} records from 'student' table.")
+    print(f"Fetched {len(student_data['rollno'])} records from 'student' table.")
     print(f"Fetched {len(children_data['child_id'])} records from 'children' table.")
     print(student_data)

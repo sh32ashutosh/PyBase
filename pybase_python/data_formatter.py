@@ -30,6 +30,6 @@ if __name__ == "__main__":
     db_manager = DatabaseManager(schema_manager)
     formatter = DataFormatter(db_manager)
     
-    print(formatter.fetchall("student"))
-    print(formatter.fetchall("children", display_as_table=False))
+    print(formatter.fetchall("students"))
+    print(formatter.fetchall("children"))
     
