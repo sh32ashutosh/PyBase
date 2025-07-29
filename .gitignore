@@ -1,9 +1,0 @@
-﻿# Python ignores
-venv/
-__pycache__/
-*.pyc
-*.log
-
-# OS ignores
-.DS_Store
-Thumbs.db
