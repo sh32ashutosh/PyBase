@@ -1,5 +1,8 @@
 # /engine/filesystem.py — handles the creation of files and directories within the database
 
+# Get parent directory
+
+
 # Custom error for duplicate database
 class DatabaseExistsError(Exception):
     def __init__(self):
@@ -11,9 +14,21 @@ def _folder_exists(path: str) -> bool:
     from os.path import exists, isdir
     return exists(path) and isdir(path)
 
+# Generate a key for our encryption
+def generate_key_iv() -> tuple[bytes, bytes]:
+    """
+    Generate a secure random 256-bit AES key and 128-bit IV (CTR mode).
+    :return: (key, iv)
+    """
+    import os
+    key = os.urandom(32)  # 256 bits
+    iv = os.urandom(16)   # 128 bits (block size of AES)
+    return (key, iv)
+
+
 
 # Creates the initial folder structure and metadata for a database
-def create_database(database_name: str, page_size=1024, compression=None, encryption='None'):
+def _create_database(database_name: str, page_size=1024, compression=None, encryption=False):
     from os import mkdir
     from os.path import dirname, abspath, join
     from datetime import datetime
@@ -27,20 +42,21 @@ def create_database(database_name: str, page_size=1024, compression=None, encryp
     data_root = join(parent_dir, "data")
     db_path = join(data_root, database_name)
 
+    # If the data directory does not exist create data directory and proceed else proceed without creating
+
     if not _folder_exists(data_root):
         mkdir(data_root)
 
-    if _folder_exists(db_path):
-        raise DatabaseExistsError()
+    
 
-    # Create base DB structure
+    # Create base database structure
     mkdir(db_path)
     mkdir(join(db_path, ".meta"))
     mkdir(join(db_path, ".index"))
     mkdir(join(db_path, ".config"))
     mkdir(join(db_path, "media"))
 
-    # Write metadata to binary file using pickle
+    # Write metadata to binary file via pickle
     meta_data = {
         "name": database_name,
         "created_at": datetime.utcnow().isoformat() + "Z",
@@ -48,7 +64,8 @@ def create_database(database_name: str, page_size=1024, compression=None, encryp
         "page_size": page_size,
         "encryption": encryption,
         "compression": compression,
-        "path": db_path
+        "path": db_path,
+        "encryption_key_and_vector":generate_key_iv() 
     }
 
     meta_file = join(db_path, ".meta", "db.meta")
@@ -60,40 +77,48 @@ def create_database(database_name: str, page_size=1024, compression=None, encryp
     print(f"Created database: {db_path}")
 
 
-# /engine/filesystem.py
+def insert_row(db_name: str, table_name: str, row_dict: dict, pk_field: str):
+    from os.path import join
+    import struct, pickle
 
-def create_table(db_name: str, table_name: str, schema: dict):
-    from os.path import join, exists
-    from os import makedirs
-    import pickle
-
-    # === Define base path ===
     base_path = join("data", db_name, table_name)
-    if exists(base_path):
-        raise FileExistsError(f"Table '{table_name}' already exists in database '{db_name}'.")
+    schema_path = join(base_path, "table.pdi")
+    data_path = join(base_path, "table.page")
+    index_path = join(base_path, "table.pdx")
 
-    makedirs(base_path)
+    # Load schema
+    fields = []
+    record_size = 0
+    with open(schema_path, "rb") as f:
+        for line in f:
+            name, offset, size = line.strip().split('|')
+            fields.append((name, int(offset), int(size)))
+            record_size += int(size)
 
-    # === 1. Create .pdi schema file ===
-    pdi_path = join(base_path, "table.pdi")
-    offset = 0
-    with open(pdi_path, "w") as f:
-        for field, (_, size) in schema.items():
-            f.write(f"{field}|{offset}|{size}\n")
-            offset += size
+    # Build binary row
+    binary_row = bytearray(record_size)
+    for field_name, offset, size in fields:
+        val = row_dict.get(field_name, "")
+        raw = str(val).encode()[:size].ljust(size, b'\x00')
+        binary_row[offset:offset + size] = raw
 
-    # === 2. Create empty binary index .pdx ===
-    pdx_path = join(base_path, "table.pdx")
-    with open(pdx_path, "wb") as f:
-        pickle.dump({}, f)
+    # Write to .page
+    with open(data_path, "ab") as f:
+        f.seek(0, 2)
+        offset = f.tell()
+        f.write(binary_row)
 
-    # === 3. Create empty data page file ===
-    page_path = join(base_path, "table.page")
-    open(page_path, "wb").close()
+    # Update index
+    try:
+        with open(index_path, "rb") as f:
+            index = pickle.load(f)
+    except:
+        index = {}
 
-    # === 4. Create table lock file ===
-    lock_path = join(base_path, "table.lock")
-    open(lock_path, "w").close()
+    primary_key = row_dict[pk_field]
+    index[primary_key] = offset
 
-    print(f"[+] Table '{table_name}' initialized in '{base_path}'")
+    with open(index_path, "wb") as f:
+        pickle.dump(index, f)
 
+    print(f"[+] Inserted row with key '{primary_key}' at offset {offset}")

@@ -537,15 +537,6 @@ python submit_benchmark.py --include-system-info
 
 ---
 
-## 🏆 Recognition & Awards
-
-- **🥇 Best Innovation in Database Technology** - Python Conference 2024
-- **⭐ Rising Star Open Source Project** - GitHub Archive Program
-- **🚀 Most Promising Database Solution** - Database Engineering Summit 2024
-- **💡 Excellence in Adaptive Computing** - ACM Computing Innovation Awards
-
----
-
 ## 📄 License & Legal
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for full details.
