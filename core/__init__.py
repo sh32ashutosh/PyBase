@@ -1,1 +1,0 @@
-# core/__init__.py — part of PyBase adaptive core

@@ -1,5 +1,0 @@
-
-from core import runtime_config
-
-print(runtime_config.get_runtime_config())
-
