@@ -4,60 +4,51 @@
 #include <vector>
 #include <unordered_map>
 #include <string>
-#include <fstream>
-#include <iostream>
+#include <cstdio> // FAST I/O
 #include <mutex>
 
-// Platform-specific export macro for DLL generation
 #ifdef _WIN32
     #define DLL_EXPORT __declspec(dllexport)
 #else
     #define DLL_EXPORT __attribute__((visibility("default")))
 #endif
 
-// A Page is a container for raw bytes. 
-// It can hold serialized ints, floats, custom classes, or image data.
+// The Container
 struct Page {
     int id;
-    bool is_dirty;   // Has the data changed since last save?
-    bool is_loaded;  // Is the page currently in RAM?
-    std::vector<uint8_t> data; // The payload
-
+    bool is_dirty;
+    bool is_loaded;
+    std::vector<uint8_t> data;
     Page() : id(-1), is_dirty(false), is_loaded(false) {}
 };
 
 class PageManager {
 private:
-    // The Page Table: Maps Page ID -> Page Object.
-    // std::unordered_map provides O(1) average time complexity for lookups.
     std::unordered_map<int, Page> page_table;
-    std::string storage_path;
-    std::mutex mtx; // For thread safety
+    std::string storage_path; // The folder where .bin files live
+    std::mutex mtx;
+
+    // Helper to get filename: "databases/page_1.bin"
+    std::string get_page_filename(int page_id);
 
 public:
     PageManager(const std::string& path);
     ~PageManager();
 
-    // Core Management
+    // Core
     void create_page(int page_id, size_t size);
-    bool load_page(int page_id);   // Load from disk to RAM
-    bool unload_page(int page_id); // Remove from RAM (save if dirty)
-    void save_page(int page_id);   // Write to disk
-    
-    // Data Access (O(1))
-    // We return raw pointers to allow Python ctypes access
+    bool load_page(int page_id);
+    bool unload_page(int page_id);
+    void save_page(int page_id);
+    void flush_all();
+
+    // Data Access
     uint8_t* get_data_ptr(int page_id);
     size_t get_data_size(int page_id);
-    
-    // Manipulation
     bool write_data(int page_id, const uint8_t* buffer, size_t size, size_t offset);
-    
-    // Helper to simulate "class student" or other custom objects
-    // In reality, this just resizes the byte buffer.
-    void resize_page(int page_id, size_t new_size);
 };
 
-// C-Compatible Interface for Python (ctypes)
+// C-Compatible Interface for Python
 extern "C" {
     DLL_EXPORT PageManager* PM_Create(const char* path);
     DLL_EXPORT void PM_Destroy(PageManager* pm);
@@ -69,4 +60,4 @@ extern "C" {
     DLL_EXPORT int PM_GetSize(PageManager* pm, int id);
 }
 
-#endif // PAGE_HPP
+#endif // PAGE_HPP end
