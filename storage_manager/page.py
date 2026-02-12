@@ -221,41 +221,41 @@ if __name__ == "__main__":
         except: pass # Ignore if file locked
     os.makedirs(TEST_DB, exist_ok=True)
 
-    print(f"\n--- 🛡️  STARTING SAFE WRAPPER TESTS ---")
+    print(f"\n--- STARTING SAFE WRAPPER TESTS ---")
     print(f"Target DB: {os.path.abspath(TEST_DB)}")
 
     try:
         # 1. Init
         print("[1/6] Initializing Manager...", end=" ")
         pm = PageManager(TEST_DB)
-        print("✅ PASS")
+        print("PASS")
 
         # 2. Create
         print("[2/6] Creating Page 1 (1KB)...", end=" ")
         pm.create_page(1, 1024)
-        print("✅ PASS")
+        print("PASS")
 
         # 3. Write
         print("[3/6] Writing Payload...", end=" ")
         payload = b"Use the Force, Luke."
         pm.write(1, payload)
-        print("✅ PASS")
+        print("PASS")
 
         # 4. Read Verification
         print("[4/6] Verifying Data in RAM...", end=" ")
         data = pm.read(1)
         if data.startswith(payload):
-            print(f"✅ PASS (Matched: '{payload.decode()}')")
+            print(f"PASS (Matched: '{payload.decode()}')")
         else:
-            print(f"❌ FAIL (Mismatch!)")
+            print(f"FAIL (Mismatch!)")
 
         # 5. Type Safety Check (The Bodyguard Test)
         print("[5/6] Testing Safety Guardrails...", end=" ")
         try:
             pm.write(1, "I am a string, not bytes") # This should fail
-            print("❌ FAIL (The guardrail failed!)")
+            print("FAIL (The guardrail failed!)")
         except TypeError:
-            print("✅ PASS (Blocked invalid input)")
+            print("PASS (Blocked invalid input)")
 
         # 6. Persistence
         print("[6/6] Testing Disk Persistence...", end=" ")
@@ -263,11 +263,11 @@ if __name__ == "__main__":
         
         # Check if file exists
         if os.path.exists(os.path.join(TEST_DB, "page_1.bin")):
-            print("✅ PASS (File found on disk)")
+            print("PASS (File found on disk)")
         else:
-            print("❌ FAIL (File missing)")
+            print("FAIL (File missing)")
 
         print("\n--- ALL SYSTEMS GO 🚀 ---")
 
     except Exception as e:
-        print(f"\n❌ CRITICAL ERROR: {e}")
+        print(f"\nCRITICAL ERROR: {e}")
