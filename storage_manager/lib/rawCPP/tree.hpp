@@ -11,7 +11,11 @@
     #define DLL_EXPORT __attribute__((visibility("default")))
 #endif
 
-struct Node{
-    void * val;
-    struct Node* next;
+class Node{
+  void * val;
+  Node * next; 
+  void * get_val(){
+    return this->val;
+  }
+  
 };
