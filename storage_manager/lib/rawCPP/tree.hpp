@@ -10,3 +10,8 @@
 #else
     #define DLL_EXPORT __attribute__((visibility("default")))
 #endif
+
+struct Node{
+    void * val;
+    struct Node* next;
+};
