@@ -18,4 +18,8 @@ class Node{
     return this->val;
   }
   
+  bool insert(Node n){
+    this->next=&n;
+    return true;
+  }
 };
