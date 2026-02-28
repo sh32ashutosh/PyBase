@@ -3,10 +3,9 @@ import os
 import sys
 import shutil
 import time
-import struct
 
 # ==========================================
-# 1. SETUP
+# 1. SETUP & PATH RESOLUTION
 # ==========================================
 def find_project_root():
     current = os.path.dirname(os.path.abspath(__file__))
@@ -19,14 +18,15 @@ def find_project_root():
     return os.path.dirname(os.path.abspath(__file__))
 
 PROJECT_ROOT = find_project_root()
-DLL_PATH = os.path.join(PROJECT_ROOT, "storage_manager", "lib", "rawCPP", "page.dll")
+# Adjusted to match the MSYS2 dll output we discussed
+DLL_PATH = os.path.join(PROJECT_ROOT, "storage_manager", "lib", "rawCPP", "page_manager.dll")
 DB_FOLDER = os.path.join(PROJECT_ROOT, "databases")
 
-print(f"--- PRECISION STRESS TEST (FILE-PER-PAGE) ---")
-print(f"DLL: {DLL_PATH}")
+print(f"--- HYBRID ENGINE STRESS TEST (FILE-PER-PAGE) ---")
+print(f"DLL Target: {DLL_PATH}")
 
 if not os.path.exists(DLL_PATH):
-    print("CRITICAL: DLL not found.")
+    print("CRITICAL: DLL not found. Did you compile it yet?")
     sys.exit(1)
 
 try:
@@ -36,35 +36,37 @@ except OSError as e:
     sys.exit(1)
 
 # ==========================================
-# 2. DEFINING SIGNATURES (FIXED)
+# 2. DEFINING AIRTIGHT SIGNATURES
 # ==========================================
 # 1. Create/Destroy
+lib.PM_Create.argtypes = [ctypes.c_char_p, ctypes.c_int] # Added max_pages
 lib.PM_Create.restype = ctypes.c_void_p
-lib.PM_Create.argtypes = [ctypes.c_char_p]
 
 lib.PM_Destroy.argtypes = [ctypes.c_void_p]
 lib.PM_Destroy.restype = None
 
 # 2. Page Management
-lib.PM_CreatePage.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int] # <--- FIXED
+lib.PM_CreatePage.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
 lib.PM_CreatePage.restype = None
 
 lib.PM_Load.argtypes = [ctypes.c_void_p, ctypes.c_int]
-lib.PM_Load.restype = None
+lib.PM_Load.restype = ctypes.c_int # Now returns success/fail
 
 lib.PM_Unload.argtypes = [ctypes.c_void_p, ctypes.c_int]
-lib.PM_Unload.restype = None
+lib.PM_Unload.restype = ctypes.c_int
+
+lib.PM_FlushAll.argtypes = [ctypes.c_void_p]
+lib.PM_FlushAll.restype = None
 
 # 3. Data IO
 lib.PM_Write.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_uint8), ctypes.c_int, ctypes.c_int]
-lib.PM_Write.restype = None
+lib.PM_Write.restype = ctypes.c_int # Now returns success/fail
 
 lib.PM_GetData.argtypes = [ctypes.c_void_p, ctypes.c_int]
 lib.PM_GetData.restype = ctypes.POINTER(ctypes.c_uint8)
 
 lib.PM_GetSize.argtypes = [ctypes.c_void_p, ctypes.c_int]
 lib.PM_GetSize.restype = ctypes.c_int
-
 
 # ==========================================
 # 3. HELPER: FORMATTING
@@ -75,10 +77,10 @@ def print_stats(phase_name, duration, num_items, total_bytes):
     mb_sec = (total_bytes / (1024*1024)) / duration
     
     print(f"[{phase_name}]")
-    print(f"   Duration : {duration:.4f} seconds")
-    print(f"   Speed    : {iops:,.0f} files/sec")
-    print(f"   Throughput: {mb_sec:,.2f} MB/s")
-    print("-" * 40)
+    print(f"   Duration   : {duration:.4f} seconds")
+    print(f"   Speed      : {iops:,.0f} ops/sec")
+    print(f"   Throughput : {mb_sec:,.2f} MB/s")
+    print("-" * 50)
 
 # ==========================================
 # 4. THE TEST
@@ -87,10 +89,11 @@ def run_test():
     NUM_PAGES = 10000
     PAGE_SIZE = 100 * 1024 # 100 KB
     TOTAL_BYTES = NUM_PAGES * PAGE_SIZE
+    MAX_RAM_PAGES = 20000 # High enough to prevent LRU eviction during the test
     
     print(f"Target: {NUM_PAGES} Pages | {PAGE_SIZE/1024:.0f} KB each | {TOTAL_BYTES/(1024**3):.2f} GB Total\n")
 
-    # Clean
+    # Clean the environment
     if os.path.exists(DB_FOLDER): shutil.rmtree(DB_FOLDER)
     os.makedirs(DB_FOLDER)
 
@@ -99,24 +102,25 @@ def run_test():
     c_buffer = (ctypes.c_uint8 * PAGE_SIZE).from_buffer_copy(raw_buffer)
     
     # --- PHASE 1: WRITE TO RAM ---
-    pm = lib.PM_Create(DB_FOLDER.encode('utf-8'))
+    pm = lib.PM_Create(DB_FOLDER.encode('utf-8'), MAX_RAM_PAGES)
     
     print("1. Writing to RAM (Allocating Pages)...")
     t_start = time.perf_counter()
     
     for i in range(NUM_PAGES):
         lib.PM_CreatePage(pm, i, PAGE_SIZE)
-        lib.PM_Write(pm, i, c_buffer, PAGE_SIZE, 0)
+        if lib.PM_Write(pm, i, c_buffer, PAGE_SIZE, 0) == 0:
+            print(f"CRITICAL: Write failed on page {i}")
+            sys.exit(1)
         
     t_end = time.perf_counter()
     print_stats("RAM WRITE", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
 
     # --- PHASE 2: FLUSH TO DISK ---
     print("2. Flushing to Disk (Creating Files)...")
-    # Note: We destroy the manager, which forces it to iterate and write every file
     t_start = time.perf_counter()
     
-    lib.PM_Destroy(pm)
+    lib.PM_Destroy(pm) # Forces flush_all() via C++ destructor
     
     t_end = time.perf_counter()
     print_stats("DISK FLUSH", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
@@ -127,17 +131,19 @@ def run_test():
         print(f" ! ERROR: Expected {NUM_PAGES} files, found {count}")
         return
 
-    # Cool down (Let OS settle)
+    # Cool down (Let OS settle I/O)
     time.sleep(1) 
 
     # --- PHASE 3: COLD LOAD ---
     print("3. Cold Load (Opening Files from Disk)...")
-    pm = lib.PM_Create(DB_FOLDER.encode('utf-8'))
+    pm = lib.PM_Create(DB_FOLDER.encode('utf-8'), MAX_RAM_PAGES)
     
     t_start = time.perf_counter()
     
     for i in range(NUM_PAGES):
-        lib.PM_Load(pm, i) # This opens the file, reads size, allocs RAM, closes file
+        if lib.PM_Load(pm, i) == 0:
+            print(f"CRITICAL: Load failed on page {i}")
+            sys.exit(1)
         
     t_end = time.perf_counter()
     print_stats("COLD READ", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
@@ -150,7 +156,6 @@ def run_test():
     t_start = time.perf_counter()
     
     for i in range(NUM_PAGES):
-        # Touch just 1 byte to mark dirty
         lib.PM_Write(pm, i, c_mod, 1, 0)
         
     t_end = time.perf_counter()
@@ -165,7 +170,7 @@ def run_test():
     t_end = time.perf_counter()
     print_stats("DISK UPDATE", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
 
-    print("\nTest Complete.")
+    print("\nBenchmark Complete. Engine is lethal.")
 
 if __name__ == "__main__":
     run_test()
