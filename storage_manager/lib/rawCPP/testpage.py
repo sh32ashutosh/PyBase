@@ -18,15 +18,15 @@ def find_project_root():
     return os.path.dirname(os.path.abspath(__file__))
 
 PROJECT_ROOT = find_project_root()
-# Adjusted to match the MSYS2 dll output we discussed
 DLL_PATH = os.path.join(PROJECT_ROOT, "storage_manager", "lib", "rawCPP", "page_manager.dll")
 DB_FOLDER = os.path.join(PROJECT_ROOT, "databases")
+DB_FILE = os.path.join(DB_FOLDER, "master_extent.db") # The single mapped file
 
-print(f"--- HYBRID ENGINE STRESS TEST (FILE-PER-PAGE) ---")
+print("--- NATIVE OS MEMORY-MAPPED STRESS TEST ---")
 print(f"DLL Target: {DLL_PATH}")
 
 if not os.path.exists(DLL_PATH):
-    print("CRITICAL: DLL not found. Did you compile it yet?")
+    print("CRITICAL: DLL not found. Compile the C++ core first.")
     sys.exit(1)
 
 try:
@@ -38,19 +38,19 @@ except OSError as e:
 # ==========================================
 # 2. DEFINING AIRTIGHT SIGNATURES
 # ==========================================
-# 1. Create/Destroy
-lib.PM_Create.argtypes = [ctypes.c_char_p, ctypes.c_int] # Added max_pages
+# void* PM_Create(const char* path, int max_pages, int page_size)
+lib.PM_Create.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int] 
 lib.PM_Create.restype = ctypes.c_void_p
 
 lib.PM_Destroy.argtypes = [ctypes.c_void_p]
 lib.PM_Destroy.restype = None
 
-# 2. Page Management
-lib.PM_CreatePage.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+# void PM_CreatePage(void* pm, int id) -> Note: size was removed, handled globally now
+lib.PM_CreatePage.argtypes = [ctypes.c_void_p, ctypes.c_int]
 lib.PM_CreatePage.restype = None
 
 lib.PM_Load.argtypes = [ctypes.c_void_p, ctypes.c_int]
-lib.PM_Load.restype = ctypes.c_int # Now returns success/fail
+lib.PM_Load.restype = ctypes.c_int
 
 lib.PM_Unload.argtypes = [ctypes.c_void_p, ctypes.c_int]
 lib.PM_Unload.restype = ctypes.c_int
@@ -58,9 +58,8 @@ lib.PM_Unload.restype = ctypes.c_int
 lib.PM_FlushAll.argtypes = [ctypes.c_void_p]
 lib.PM_FlushAll.restype = None
 
-# 3. Data IO
 lib.PM_Write.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_uint8), ctypes.c_int, ctypes.c_int]
-lib.PM_Write.restype = ctypes.c_int # Now returns success/fail
+lib.PM_Write.restype = ctypes.c_int
 
 lib.PM_GetData.argtypes = [ctypes.c_void_p, ctypes.c_int]
 lib.PM_GetData.restype = ctypes.POINTER(ctypes.c_uint8)
@@ -72,7 +71,7 @@ lib.PM_GetSize.restype = ctypes.c_int
 # 3. HELPER: FORMATTING
 # ==========================================
 def print_stats(phase_name, duration, num_items, total_bytes):
-    if duration <= 0: duration = 0.000001 # Prevent div/0
+    if duration <= 0: duration = 0.000001
     iops = num_items / duration
     mb_sec = (total_bytes / (1024*1024)) / duration
     
@@ -89,54 +88,60 @@ def run_test():
     NUM_PAGES = 10000
     PAGE_SIZE = 100 * 1024 # 100 KB
     TOTAL_BYTES = NUM_PAGES * PAGE_SIZE
-    MAX_RAM_PAGES = 20000 # High enough to prevent LRU eviction during the test
     
     print(f"Target: {NUM_PAGES} Pages | {PAGE_SIZE/1024:.0f} KB each | {TOTAL_BYTES/(1024**3):.2f} GB Total\n")
 
     # Clean the environment
-    if os.path.exists(DB_FOLDER): shutil.rmtree(DB_FOLDER)
-    os.makedirs(DB_FOLDER)
+    if not os.path.exists(DB_FOLDER):
+        os.makedirs(DB_FOLDER)
+    if os.path.exists(DB_FILE):
+        os.remove(DB_FILE)
 
     # Pre-alloc buffers
     raw_buffer = b'X' * PAGE_SIZE
     c_buffer = (ctypes.c_uint8 * PAGE_SIZE).from_buffer_copy(raw_buffer)
     
-    # --- PHASE 1: WRITE TO RAM ---
-    pm = lib.PM_Create(DB_FOLDER.encode('utf-8'), MAX_RAM_PAGES)
+    # --- PHASE 1: WRITE TO OS VIRTUAL MEMORY ---
+    # This instantly allocates the 1GB file on disk and maps it to RAM.
+    pm = lib.PM_Create(DB_FILE.encode('utf-8'), NUM_PAGES, PAGE_SIZE)
+    if not pm:
+        print("CRITICAL: Failed to map memory. Check disk space or permissions.")
+        sys.exit(1)
     
-    print("1. Writing to RAM (Allocating Pages)...")
+    print("1. Writing to Mapped Memory (Allocating Pages)...")
     t_start = time.perf_counter()
     
     for i in range(NUM_PAGES):
-        lib.PM_CreatePage(pm, i, PAGE_SIZE)
+        lib.PM_CreatePage(pm, i)
         if lib.PM_Write(pm, i, c_buffer, PAGE_SIZE, 0) == 0:
             print(f"CRITICAL: Write failed on page {i}")
             sys.exit(1)
         
     t_end = time.perf_counter()
-    print_stats("RAM WRITE", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
+    print_stats("MMAP WRITE", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
 
     # --- PHASE 2: FLUSH TO DISK ---
-    print("2. Flushing to Disk (Creating Files)...")
+    print("2. Flushing View to Disk (OS Sync)...")
     t_start = time.perf_counter()
     
-    lib.PM_Destroy(pm) # Forces flush_all() via C++ destructor
+    lib.PM_Destroy(pm) 
     
     t_end = time.perf_counter()
-    print_stats("DISK FLUSH", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
+    print_stats("OS FLUSH", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
     
     # Validation
-    count = len(os.listdir(DB_FOLDER))
-    if count != NUM_PAGES:
-        print(f" ! ERROR: Expected {NUM_PAGES} files, found {count}")
+    if not os.path.exists(DB_FILE):
+        print(" ! ERROR: Master extent file was not created.")
         return
+    actual_size = os.path.getsize(DB_FILE)
+    if actual_size != TOTAL_BYTES:
+        print(f" ! ERROR: File size mismatch. Expected {TOTAL_BYTES}, got {actual_size}")
 
-    # Cool down (Let OS settle I/O)
     time.sleep(1) 
 
     # --- PHASE 3: COLD LOAD ---
-    print("3. Cold Load (Opening Files from Disk)...")
-    pm = lib.PM_Create(DB_FOLDER.encode('utf-8'), MAX_RAM_PAGES)
+    print("3. Cold Load (Re-mapping File)...")
+    pm = lib.PM_Create(DB_FILE.encode('utf-8'), NUM_PAGES, PAGE_SIZE)
     
     t_start = time.perf_counter()
     
@@ -146,10 +151,10 @@ def run_test():
             sys.exit(1)
         
     t_end = time.perf_counter()
-    print_stats("COLD READ", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
+    print_stats("MMAP LOAD", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
 
     # --- PHASE 4: MODIFY ---
-    print("4. Modifying Pages (Dirty Bit Set)...")
+    print("4. Modifying Pages (Direct Pointer Access)...")
     mod_byte = b'Z'
     c_mod = (ctypes.c_uint8 * 1).from_buffer_copy(mod_byte)
     
@@ -159,18 +164,18 @@ def run_test():
         lib.PM_Write(pm, i, c_mod, 1, 0)
         
     t_end = time.perf_counter()
-    print_stats("RAM MODIFY", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
+    print_stats("MMAP MODIFY", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
 
     # --- PHASE 5: RE-SAVE ---
-    print("5. Re-Saving (Overwriting Files)...")
+    print("5. Re-Saving (Unmapping File)...")
     t_start = time.perf_counter()
     
     lib.PM_Destroy(pm)
     
     t_end = time.perf_counter()
-    print_stats("DISK UPDATE", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
+    print_stats("OS UPDATE", t_end - t_start, NUM_PAGES, TOTAL_BYTES)
 
-    print("\nBenchmark Complete. Engine is lethal.")
+    print("\nBenchmark Complete. Native I/O achieved.")
 
 if __name__ == "__main__":
     run_test()

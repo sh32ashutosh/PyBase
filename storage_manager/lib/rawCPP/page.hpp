@@ -9,7 +9,7 @@
 #include <mutex>
 #include <atomic>
 #include <filesystem>
-#include <cstdint>
+#include <cstdint> // Added for fixed-width integers
 
 #ifdef _WIN32
     #define DLL_EXPORT __declspec(dllexport)

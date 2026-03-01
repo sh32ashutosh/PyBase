@@ -1,5 +1,5 @@
 #include "page.hpp"
-#include <cstring>
+#include <cstring> // Required for std::memcpy
 
 namespace fs = std::filesystem;
 

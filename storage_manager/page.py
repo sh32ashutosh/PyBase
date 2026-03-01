@@ -16,26 +16,31 @@ except (ImportError, ValueError):
 
 class PageManager:
     """
-    The Fortress around your C++ Engine.
+    The Fortress around your OS-Native C++ Engine.
     
     This class validates every piece of data coming from Python 
-    before letting it touch the C++ memory.
+    before letting it touch the kernel-mapped memory space.
     """
 
-    def __init__(self, storage_path: str, max_pages: int = 1000):
+    def __init__(self, db_file_path: str, max_pages: int = 10000, page_size: int = 102400):
         """
-        Starts the storage engine.
+        Starts the memory-mapped storage engine.
         
-        :param storage_path: The folder where your .bin files will live.
-        :param max_pages: The maximum number of pages to keep in RAM before evicting.
+        :param db_file_path: The exact path to the master .db file.
+        :param max_pages: The maximum number of pages this extent can hold.
+        :param page_size: The fixed size of each page in bytes (e.g., 102400 for 100KB).
         """
-        if not isinstance(storage_path, str):
-            raise TypeError(f"Storage Path must be a text string, you gave me a {type(storage_path)}")
+        if not isinstance(db_file_path, str):
+            raise TypeError(f"DB File Path must be a string, got {type(db_file_path)}")
         if not isinstance(max_pages, int) or max_pages <= 0:
-            raise ValueError(f"Max Pages must be a positive integer, you gave me: {max_pages}")
+            raise ValueError(f"Max Pages must be a positive integer, got: {max_pages}")
+        if not isinstance(page_size, int) or page_size <= 0:
+            raise ValueError(f"Page Size must be a positive integer, got: {page_size}")
+
+        self.page_size = page_size
 
         # ---------------------------------------------------------
-        # A. FINDING THE DLL
+        # A. FINDING THE DLL/SO
         # ---------------------------------------------------------
         try:
             self._lib = load_dll("page_manager", search_dir="lib/rawCPP") 
@@ -43,18 +48,20 @@ class PageManager:
             try:
                 self._lib = load_dll("page_manager", search_dir="rawCPP")
             except Exception as e:
-                raise RuntimeError(f"CRITICAL: Could not find 'page_manager.dll'. Error Details: {e}")
+                raise RuntimeError(f"CRITICAL: Could not find 'page_manager' binary. Error Details: {e}")
 
         # ---------------------------------------------------------
         # B. DEFINING THE RULES (Signatures)
         # ---------------------------------------------------------
-        self._lib.PM_Create.argtypes = [ctypes.c_char_p, ctypes.c_int] 
+        # void* PM_Create(const char* path, int max_pages, int page_size)
+        self._lib.PM_Create.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int] 
         self._lib.PM_Create.restype = ctypes.c_void_p
 
         self._lib.PM_Destroy.argtypes = [ctypes.c_void_p]
         self._lib.PM_Destroy.restype = None
 
-        self._lib.PM_CreatePage.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        # void PM_CreatePage(void* pm, int id) -> Size is globally fixed now
+        self._lib.PM_CreatePage.argtypes = [ctypes.c_void_p, ctypes.c_int]
         self._lib.PM_CreatePage.restype = None
 
         self._lib.PM_Load.argtypes = [ctypes.c_void_p, ctypes.c_int]
@@ -78,41 +85,38 @@ class PageManager:
         # ---------------------------------------------------------
         # C. IGNITION
         # ---------------------------------------------------------
-        path_bytes = storage_path.encode('utf-8')
-        self._pm_ptr = self._lib.PM_Create(path_bytes, max_pages)
+        path_bytes = db_file_path.encode('utf-8')
+        self._pm_ptr = self._lib.PM_Create(path_bytes, max_pages, page_size)
 
         if not self._pm_ptr:
-            raise MemoryError("C++ failed to initialize. It returned a Null Pointer (0x0).")
+            raise MemoryError("C++ failed to map OS memory. Check disk space or permissions.")
 
-    def create_page(self, page_id: int, size: int):
-        """Allocates a new empty page in RAM."""
+    def create_page(self, page_id: int):
+        """Zeroes out a specific page block in the memory map."""
         self._validate_id(page_id)
-        if not isinstance(size, int) or size <= 0:
-            raise ValueError(f"Size must be a positive integer. You gave me: {size}")
-        
-        self._lib.PM_CreatePage(self._pm_ptr, page_id, size)
+        self._lib.PM_CreatePage(self._pm_ptr, page_id)
 
     def load_page(self, page_id: int):
-        """Reads a page file from disk into RAM."""
+        """Prepares a page (handled implicitly by OS page-faults now)."""
         self._validate_id(page_id)
         result = self._lib.PM_Load(self._pm_ptr, page_id)
         if result == 0:
-            raise IOError(f"Failed to load page {page_id}. Does the file exist?")
+            raise IOError(f"Failed to load page {page_id}.")
 
     def unload_page(self, page_id: int):
-        """Kicks a page out of RAM, saving to disk if modified."""
+        """Forces the OS to flush this specific memory block to disk."""
         self._validate_id(page_id)
         result = self._lib.PM_Unload(self._pm_ptr, page_id)
         if result == 0:
-            raise ValueError(f"Failed to unload page {page_id}. It might not be in memory.")
+            raise ValueError(f"Failed to unload page {page_id}.")
 
     def flush_all(self):
-        """Forces all dirty pages currently in RAM to be written to disk."""
+        """Forces the OS to synchronize the entire memory map to disk."""
         if self._pm_ptr:
             self._lib.PM_FlushAll(self._pm_ptr)
 
     def write(self, page_id: int, data: bytes, offset: int = 0):
-        """Writes raw bytes into a specific page."""
+        """Writes raw bytes directly into the OS memory map."""
         self._validate_id(page_id)
         
         if not isinstance(data, bytes):
@@ -124,31 +128,34 @@ class PageManager:
         data_len = len(data)
         if data_len == 0: return
 
+        if offset + data_len > self.page_size:
+            raise BufferError(f"Write exceeds page boundaries. Page size is {self.page_size}.")
+
         c_buffer = (ctypes.c_uint8 * data_len).from_buffer_copy(data)
         
         result = self._lib.PM_Write(self._pm_ptr, page_id, c_buffer, data_len, offset)
         if result == 0:
-            raise RuntimeError(f"Failed to write to page {page_id}. Is it loaded?")
+            raise RuntimeError(f"Failed to write to page {page_id}. Out of bounds or lock failed.")
 
     def read(self, page_id: int) -> bytes:
-        """Returns the contents of a page as a Python bytes object."""
+        """Returns the contents of a page from the memory map."""
         self._validate_id(page_id)
         
         ptr = self._lib.PM_GetData(self._pm_ptr, page_id)
         
         if not ptr:
-            raise RuntimeError(f"Page {page_id} is not loaded in memory. Call load_page() first.")
+            raise RuntimeError(f"Pointer mapping failed for page {page_id}.")
         
         size = self._lib.PM_GetSize(self._pm_ptr, page_id)
         return ctypes.string_at(ptr, size)
 
     def get_size(self, page_id: int) -> int:
-        """Returns the size of the page in bytes."""
+        """Returns the fixed size of the extent page."""
         self._validate_id(page_id)
         return self._lib.PM_GetSize(self._pm_ptr, page_id)
 
     def destroy(self):
-        """Manual Shutdown. Forces C++ to save dirty pages and free memory."""
+        """Unmaps the OS memory and closes file handles."""
         if self._pm_ptr:
             self._lib.PM_Destroy(self._pm_ptr)
             self._pm_ptr = None
@@ -168,32 +175,30 @@ class PageManager:
 # TEST SUITE
 # ==========================================
 if __name__ == "__main__":
-    import shutil
-
-    TEST_DB = "./test_db_safe"
-    if os.path.exists(TEST_DB):
-        try: shutil.rmtree(TEST_DB)
+    TEST_DB_FILE = "./master_test_extent.db"
+    if os.path.exists(TEST_DB_FILE):
+        try: os.remove(TEST_DB_FILE)
         except: pass 
-    os.makedirs(TEST_DB, exist_ok=True)
 
     print(f"\n--- STARTING SAFE WRAPPER TESTS ---")
-    print(f"Target DB: {os.path.abspath(TEST_DB)}")
+    print(f"Target DB: {os.path.abspath(TEST_DB_FILE)}")
 
     try:
-        print("[1/6] Initializing Manager...", end=" ")
-        pm = PageManager(TEST_DB)
+        print("[1/6] Initializing Mapped Manager...", end=" ")
+        # 10 pages, 1KB each
+        pm = PageManager(TEST_DB_FILE, max_pages=10, page_size=1024)
         print("PASS")
 
-        print("[2/6] Creating Page 1 (1KB)...", end=" ")
-        pm.create_page(1, 1024)
+        print("[2/6] Zeroing Page 1...", end=" ")
+        pm.create_page(1)
         print("PASS")
 
         print("[3/6] Writing Payload...", end=" ")
-        payload = b"Use the Force, Luke."
+        payload = b"Engine is mapped and lethal."
         pm.write(1, payload)
         print("PASS")
 
-        print("[4/6] Verifying Data in RAM...", end=" ")
+        print("[4/6] Verifying Data in Map...", end=" ")
         data = pm.read(1)
         if data.startswith(payload):
             print(f"PASS (Matched: '{payload.decode()}')")
@@ -207,11 +212,16 @@ if __name__ == "__main__":
         except TypeError:
             print("PASS (Blocked invalid input)")
 
-        print("[6/6] Testing Disk Persistence...", end=" ")
+        print("[6/6] Testing OS Unmap & Persistence...", end=" ")
         pm.destroy() 
         
-        if os.path.exists(os.path.join(TEST_DB, "page_1.bin")):
-            print("PASS (File found on disk)")
+        if os.path.exists(TEST_DB_FILE):
+            actual_size = os.path.getsize(TEST_DB_FILE)
+            expected_size = 10 * 1024
+            if actual_size == expected_size:
+                print(f"PASS (File found, exact size: {actual_size} bytes)")
+            else:
+                print(f"FAIL (File size {actual_size} != {expected_size})")
         else:
             print("FAIL (File missing)")
 
