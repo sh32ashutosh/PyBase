@@ -45,14 +45,12 @@ public:
     RecordManager(PageManager* page_manager);
     ~RecordManager();
 
-    // Returns the slot_id (or -1 if full)
     int insert_record(int page_id, const uint8_t* data, uint32_t size);
-    
-    // Deletes a record by zeroing its slot (returns true on success)
     bool delete_record(int page_id, int slot_id);
-    
-    // Gets a pointer to the record and sets out_size to its length
     uint8_t* get_record(int page_id, int slot_id, uint32_t* out_size);
+    
+    // NEW: Exposing slot count for Sequential Scanning
+    int get_num_slots(int page_id);
 };
 
 // --- C-Compatible Export Interface ---
@@ -62,6 +60,9 @@ extern "C" {
     DLL_EXPORT int RM_InsertRecord(RecordManager* rm, int page_id, const uint8_t* data, uint32_t size);
     DLL_EXPORT bool RM_DeleteRecord(RecordManager* rm, int page_id, int slot_id);
     DLL_EXPORT uint8_t* RM_GetRecord(RecordManager* rm, int page_id, int slot_id, uint32_t* out_size);
+    
+    // NEW: C-API hook for the scanner
+    DLL_EXPORT int RM_GetNumSlots(RecordManager* rm, int page_id);
 }
 
 #endif // RECORD_MANAGER_HPP
