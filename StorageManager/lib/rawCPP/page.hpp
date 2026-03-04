@@ -2,66 +2,47 @@
 #define PAGE_HPP
 
 #include <string>
-#include <shared_mutex>
-#include <mutex>
+#include <fstream>
+#include <vector>
 #include <unordered_map>
+#include <mutex>
 #include <cstdint>
-#include <memory>
 
 #ifdef _WIN32
     #define DLL_EXPORT __declspec(dllexport)
-    #include <windows.h>
 #else
     #define DLL_EXPORT __attribute__((visibility("default")))
 #endif
 
-struct PageLock {
-    std::shared_mutex rw_lock;
-};
-
-class DLL_EXPORT PageManager {
+class PageManager {
 private:
     std::string db_file_path;
-    size_t global_page_size;
-    size_t total_extent_size;
-    
-    uint8_t* mapped_memory;
-    
-#ifdef _WIN32
-    HANDLE hFile;
-    HANDLE hMapping;
-#else
-    int fd;
-#endif
+    std::fstream db_file;
+    int max_pages;
+    int page_size;
+    std::mutex pm_mutex;
 
-    std::unordered_map<int, std::unique_ptr<PageLock>> locks;
-    std::shared_mutex table_lock; 
-
-    PageLock& get_or_create_lock(int page_id);
+    // Simple in-memory buffer pool
+    std::unordered_map<int, std::vector<uint8_t>> buffer_pool;
 
 public:
-    PageManager(const std::string& path, size_t max_pages, size_t page_size);
+    PageManager(const std::string& db_path, int max_pages, int page_size);
     ~PageManager();
 
-    void create_page(int page_id);
-    bool load_page(int page_id);
-    bool unload_page(int page_id);
+    bool create_page(int page_id);
+    bool read_page(int page_id, uint8_t* buffer);
+    bool write_page(int page_id, const uint8_t* buffer);
     void flush_all();
-
-    uint8_t* get_data_ptr(int page_id);
-    size_t get_data_size(int page_id);
-    bool write_data(int page_id, const uint8_t* buffer, size_t size, size_t offset);
 };
 
+// --- C-Compatible Export Interface ---
 extern "C" {
-    DLL_EXPORT PageManager* PM_Create(const char* path, int max_pages, int page_size);
+    DLL_EXPORT PageManager* PM_Create(const char* db_path, int max_pages, int page_size);
     DLL_EXPORT void PM_Destroy(PageManager* pm);
-    DLL_EXPORT void PM_CreatePage(PageManager* pm, int id);
-    DLL_EXPORT int PM_Load(PageManager* pm, int id);
-    DLL_EXPORT int PM_Unload(PageManager* pm, int id);
-    DLL_EXPORT int PM_Write(PageManager* pm, int id, const uint8_t* data, int size, int offset);
-    DLL_EXPORT uint8_t* PM_GetData(PageManager* pm, int id);
-    DLL_EXPORT int PM_GetSize(PageManager* pm, int id);
+    DLL_EXPORT bool PM_CreatePage(PageManager* pm, int page_id);
+    // THESE WERE MISSING! Now Python can actually see them:
+    DLL_EXPORT bool PM_ReadPage(PageManager* pm, int page_id, uint8_t* buffer);
+    DLL_EXPORT bool PM_WritePage(PageManager* pm, int page_id, const uint8_t* buffer);
     DLL_EXPORT void PM_FlushAll(PageManager* pm);
 }
 

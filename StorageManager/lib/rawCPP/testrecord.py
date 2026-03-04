@@ -8,7 +8,7 @@ import sys
 def find_project_root():
     current = os.path.dirname(os.path.abspath(__file__))
     for _ in range(5):
-        if os.path.exists(os.path.join(current, "storage_manager")):
+        if os.path.exists(os.path.join(current, "StorageManager")):
             return current
         parent = os.path.dirname(current)
         if parent == current: break
@@ -16,7 +16,7 @@ def find_project_root():
     return os.path.dirname(os.path.abspath(__file__))
 
 PROJECT_ROOT = find_project_root()
-TARGET_DIR = os.path.join(PROJECT_ROOT, "storage_manager", "lib", "rawCPP")
+TARGET_DIR = os.path.join(PROJECT_ROOT, "StorageManager", "lib", "''")
 
 PM_DLL_PATH = os.path.join(TARGET_DIR, "page_manager.dll")
 RM_DLL_PATH = os.path.join(TARGET_DIR, "record_manager.dll")

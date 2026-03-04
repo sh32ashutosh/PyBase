@@ -28,19 +28,20 @@ def resolve_dll_path(dll_name: str) -> str:
     project_root = current_dir
     
     for _ in range(5):
-        if os.path.exists(os.path.join(project_root, "storage_manager")):
+        if os.path.exists(os.path.join(project_root, "StorageManager")):
             break
         parent = os.path.dirname(project_root)
         if parent == project_root:
             break
         project_root = parent
 
-    target_path = os.path.join(project_root, "storage_manager", "lib", "rawCPP", filename)
+    # THE FIX: Pointing strictly at the 'lib' folder, bypassing 'rawCPP'
+    target_path = os.path.join(project_root, "StorageManager", "lib", filename)
+    
     if not os.path.exists(target_path):
         raise FileNotFoundError(f"CRITICAL: Binary not found at {target_path}")
         
     return target_path
-
 # ==========================================
 # 3. THE RECORD MANAGER WRAPPER
 # ==========================================

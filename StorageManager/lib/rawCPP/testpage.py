@@ -10,7 +10,7 @@ import time
 def find_project_root():
     current = os.path.dirname(os.path.abspath(__file__))
     for _ in range(5):
-        if os.path.exists(os.path.join(current, "storage_manager")):
+        if os.path.exists(os.path.join(current, "StorageManager")):
             return current
         parent = os.path.dirname(current)
         if parent == current: break
@@ -18,7 +18,7 @@ def find_project_root():
     return os.path.dirname(os.path.abspath(__file__))
 
 PROJECT_ROOT = find_project_root()
-DLL_PATH = os.path.join(PROJECT_ROOT, "storage_manager", "lib", "rawCPP", "page_manager.dll")
+DLL_PATH = os.path.join(PROJECT_ROOT, "StorageManager", "lib", "''", "page_manager.dll")
 DB_FOLDER = os.path.join(PROJECT_ROOT, "databases")
 DB_FILE = os.path.join(DB_FOLDER, "master_extent.db") # The single mapped file
 

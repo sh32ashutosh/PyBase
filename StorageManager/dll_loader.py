@@ -36,15 +36,15 @@ def load_dll(lib_name: str, search_dir: str = ".") -> ctypes.CDLL:
         possible_paths.append(os.path.join(search_dir, lib_name))
     else:
         # Strategy B: Relative to this loader script (Standard)
-        # e.g. storage_manager/rawCPP/page.dll
+        # e.g. StorageManager/''/page.dll
         possible_paths.append(os.path.join(current_loader_dir, search_dir, lib_name))
 
         # Strategy C: Relative to 'lib' (Fixes your specific project structure)
-        # e.g. storage_manager/lib/rawCPP/page.dll
+        # e.g. StorageManager/lib/''/page.dll
         possible_paths.append(os.path.join(current_loader_dir, "lib", search_dir, lib_name))
         
         # Strategy D: Check direct subfolder in lib (Fallback)
-        # e.g. storage_manager/lib/page.dll
+        # e.g. StorageManager/lib/page.dll
         possible_paths.append(os.path.join(current_loader_dir, "lib", lib_name))
 
     # 3. Hunt for the file

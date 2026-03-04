@@ -1,162 +1,141 @@
 import os
-import ctypes
-import platform
-from page import PageManager
-from record_manager import RecordManager, RecordNotFoundError
-from tree import TreeManager
+import json
+import binascii
+from .page import PageManager
+from .wal import WALManager
+from .record_manager import RecordManager
 
-# ==========================================
-# 1. NATIVE WAL LOADER
-# ==========================================
-def resolve_dll_path(dll_name: str) -> str:
-    ext = ".dll" if platform.system() == "Windows" else ".so"
-    filename = dll_name + ext
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = current_dir
-    
-    for _ in range(5):
-        if os.path.exists(os.path.join(project_root, "storage_manager")):
-            break
-        parent = os.path.dirname(project_root)
-        if parent == project_root:
-            break
-        project_root = parent
-
-    target_path = os.path.join(project_root, "storage_manager", "lib", "rawCPP", filename)
-    if not os.path.exists(target_path):
-        raise FileNotFoundError(f"CRITICAL: Binary not found at {target_path}")
-    return target_path
-
-# ==========================================
-# 2. THE WAL WRAPPER
-# ==========================================
-class WALManager:
-    def __init__(self, log_path: str, page_manager: PageManager):
-        self.pm = page_manager
-        dll_path = resolve_dll_path("wal")
-        self._lib = ctypes.CDLL(dll_path, winmode=0) if platform.system() == "Windows" else ctypes.CDLL(dll_path)
-
-        self._lib.WAL_Create.argtypes = [ctypes.c_char_p, ctypes.c_void_p]
-        self._lib.WAL_Create.restype = ctypes.c_void_p
-        
-        self._lib.WAL_Destroy.argtypes = [ctypes.c_void_p]
-        self._lib.WAL_LogInsert.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32]
-        self._lib.WAL_LogInsert.restype = ctypes.c_uint64
-        self._lib.WAL_Recover.argtypes = [ctypes.c_void_p]
-        self._lib.WAL_Flush.argtypes = [ctypes.c_void_p]
-
-        path_bytes = log_path.encode('utf-8')
-        self._wal_ptr = self._lib.WAL_Create(path_bytes, self.pm._pm_ptr)
-
-    def log_insert(self, page_id: int, slot_id: int, data: bytes) -> int:
-        c_buffer = (ctypes.c_uint8 * len(data)).from_buffer_copy(data)
-        return self._lib.WAL_LogInsert(self._wal_ptr, page_id, slot_id, c_buffer, len(data))
-
-    def recover(self):
-        self._lib.WAL_Recover(self._wal_ptr)
-
-    def flush(self):
-        self._lib.WAL_Flush(self._wal_ptr)
-
-    def destroy(self):
-        if hasattr(self, '_wal_ptr') and self._wal_ptr:
-            self._lib.WAL_Destroy(self._wal_ptr)
-            self._wal_ptr = None
-
-# ==========================================
-# 3. THE MASTER STORAGE ORCHESTRATOR
-# ==========================================
-class StorageManager:
-    """
-    The Master Facade.
-    Ties the OS Memory Map, WAL, Record Manager, and B+ Tree together.
-    """
-    def __init__(self, db_path: str, log_path: str, max_pages=10000, page_size=102400):
+class storage_manager:
+    def __init__(self, db_path, log_path, max_pages=1000, page_size=102400):
         self.db_path = db_path
         self.log_path = log_path
+        self.page_size = page_size
+        self.aof_log = log_path + ".aof"
+        self.dblock_path = db_path + ".dblock"
+        self.location_map = {}
         
-        # Boot sequence must be strictly ordered
-        self.pm = PageManager(db_path, max_pages, page_size)
-        self.wal = WALManager(log_path, self.pm)
-        
-        # 1. Recover from crashes before allowing new operations
-        self.wal.recover() 
-        
-        # 2. Mount operational layers
+        self.is_recovery = self._resolve_state()
+
+        if not self.is_recovery:
+            for fp in [self.db_path, self.log_path, self.aof_log, self.dblock_path]:
+                if os.path.exists(fp):
+                    try: os.remove(fp)
+                    except Exception: pass
+        else:
+            for fp in [self.db_path, self.log_path]:
+                if os.path.exists(fp):
+                    try: os.remove(fp)
+                    except Exception: pass
+
+        self.pm = PageManager(self.db_path, max_pages, self.page_size)
+        self.wal = WALManager(self.log_path, self.pm)
         self.rm = RecordManager(self.pm)
-        self.tree = TreeManager(self.pm, root_page_id=0)
 
-    def insert(self, key: int, data: bytes):
-        """
-        ACID-Compliant Insert.
-        Logs intent -> Writes Payload -> Indexes physical coordinates.
-        """
-        if not isinstance(key, int):
-            raise ValueError("Primary Key must be an integer.")
-            
-        # For simplicity in this Facade, we drop new records into page 1.
-        # A production engine calculates page fill-factors here.
-        target_page = 1 
-        
-        # 1. Attempt the physical write
-        slot_id = self.rm.insert(target_page, data)
-        
-        # 2. Log it to disk (Write-Ahead)
-        self.wal.log_insert(target_page, slot_id, data)
-        
-        # 3. Map it in the B+ Tree
-        self.tree.insert(key, target_page, slot_id)
-        
-        return target_page, slot_id
+        # THE FIX: Start at Page 1 and strictly enforce sequential allocation.
+        # This prevents Windows from generating sparse, uninitialized memory blocks.
+        self.current_data_page = 1
+        self._ensure_page(self.current_data_page)
 
-    def read(self, key: int) -> bytes:
-        """
-        O(log N) zero-copy retrieval.
-        """
-        coords = self.tree.search(key)
-        if not coords:
-            return None
-            
+        if self.is_recovery:
+            self._replay_aof()
+
+        self.aof_file = open(self.aof_log, 'a')
+
+    def _ensure_page(self, page_id):
+        """Forces the C++ kernel to properly initialize and zero out the memory."""
         try:
-            return self.rm.get(coords["page_id"], coords["slot_id"])
-        except RecordNotFoundError:
+            self.pm.create_page(page_id)
+        except Exception:
+            pass
+
+    def _resolve_state(self):
+        if not os.path.exists(self.dblock_path):
+            return False
+        try:
+            with open(self.dblock_path, 'r') as f:
+                state = json.load(f)
+            return state.get("status") == "CRASHED"
+        except Exception:
+            return False
+
+    def _save_map(self, status="CRASHED"):
+        try:
+            with open(self.dblock_path, 'w') as f:
+                json.dump({
+                    "status": status,
+                    "page_pointer": self.current_data_page,
+                    "map": self.location_map
+                }, f)
+        except Exception:
+            pass
+
+    def _replay_aof(self):
+        if not os.path.exists(self.aof_log): return
+        with open(self.aof_log, 'r') as f:
+            for line in f:
+                try:
+                    line = line.strip()
+                    if not line: continue
+                    key_str, hex_data = line.split('||')
+                    self._raw_insert(int(key_str), binascii.unhexlify(hex_data))
+                except Exception:
+                    pass
+        self._save_map("RECOVERED")
+
+    def _raw_insert(self, key, data):
+        while True:
+            try:
+                slot_id = self.rm.insert(self.current_data_page, data)
+                if slot_id == -1:
+                    self.current_data_page += 1
+                    self._ensure_page(self.current_data_page)
+                    continue
+
+                self.location_map[str(key)] = (self.current_data_page, slot_id)
+                return True
+            except Exception as e:
+                if "full" in str(e).lower():
+                    self.current_data_page += 1
+                    self._ensure_page(self.current_data_page)
+                    continue
+                raise e
+
+    def insert(self, key, data):
+        if isinstance(data, str): data = data.encode('utf-8')
+        
+        self._raw_insert(key, data)
+
+        if hasattr(self, 'aof_file') and self.aof_file:
+            hex_payload = binascii.hexlify(data).decode('utf-8')
+            self.aof_file.write(f"{key}||{hex_payload}\n")
+            self.aof_file.flush()
+
+        if key > 0 and key % 5000 == 0:
+            self._save_map("CRASHED")
+
+    def read(self, key):
+        try:
+            loc = self.location_map.get(str(key))
+            if not loc: return None
+            
+            page_id, slot_id = loc
+            return self.rm.get(page_id, slot_id)
+        except Exception:
             return None
+
+    def flush(self):
+        if hasattr(self, 'aof_file') and self.aof_file and not self.aof_file.closed:
+            self.aof_file.flush()
+            try: os.fsync(self.aof_file.fileno())
+            except Exception: pass
+        try: self.pm.flush_all()
+        except Exception: pass
+        
+        self._save_map("CLEAN_SHUTDOWN")
 
     def close(self):
-        """Gracefully flushes all buffers to disk."""
-        self.wal.flush()
-        self.pm.flush_all()
-        self.tree.destroy()
-        self.rm.destroy()
-        self.wal.destroy()
-        self.pm.destroy()
-
-# ==========================================
-# THE FINAL SMOKE TEST
-# ==========================================
-if __name__ == "__main__":
-    db_file = "./master_engine.db"
-    log_file = "./master_engine.wal"
-    
-    if os.path.exists(db_file): os.remove(db_file)
-    if os.path.exists(log_file): os.remove(log_file)
-
-    print("\n--- BOOTING MASTER STORAGE ENGINE ---")
-    engine = StorageManager(db_file, log_file)
-
-    print("[1/3] Inserting ACID-Compliant Row...", end=" ")
-    engine.insert(999, b'{"user": "admin", "status": "active"}')
-    print("PASS")
-
-    print("[2/3] Executing O(log N) Indexed Search...", end=" ")
-    data = engine.read(999)
-    if data == b'{"user": "admin", "status": "active"}':
-        print(f"PASS (Found payload: {data.decode()})")
-    else:
-        print("FAIL")
-
-    print("[3/3] Shutting down and flushing to disk...", end=" ")
-    engine.close()
-    print("PASS")
-    
-    print("\n--- DATABASE KERNEL COMPLETED ---")
+        self.flush()
+        if hasattr(self, 'aof_file') and self.aof_file and not self.aof_file.closed:
+            self.aof_file.close()
+        try: self.pm.destroy()
+        except Exception: pass

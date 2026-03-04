@@ -14,14 +14,14 @@ def resolve_dll_path(dll_name: str) -> str:
     project_root = current_dir
     
     for _ in range(5):
-        if os.path.exists(os.path.join(project_root, "storage_manager")):
+        if os.path.exists(os.path.join(project_root, "StorageManager")):
             break
         parent = os.path.dirname(project_root)
         if parent == project_root:
             break
         project_root = parent
     
-    target = os.path.join(project_root, "storage_manager", "lib", "rawCPP", filename)
+    target = os.path.join(project_root, "StorageManager", "lib", "''", filename)
     if not os.path.exists(target):
         local_target = os.path.join(current_dir, filename)
         if os.path.exists(local_target):
