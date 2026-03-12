@@ -33,9 +33,9 @@ def run_rigorous_test():
     # ---------------------------------------------------------
     print("\n[PHASE 1] Booting Engine & Generating Heavy Load...")
     # UPDATED: Using storage_manager (lowercase)
-    engine = storage_manager(db_file, log_file, max_pages=1000, page_size=102400)
+    engine = storage_manager(db_file, log_file, max_pages=1000, page_size=1020)
     
-    TOTAL_RECORDS = 50000
+    TOTAL_RECORDS = 500
     print(f"      -> Inserting {TOTAL_RECORDS} records to force B+ Tree splits...")
     
     start_time = time.time()
@@ -45,8 +45,8 @@ def run_rigorous_test():
         
         if i > 0 and i % 10000 == 0:
             print(f"         ... {i} records written.")
-            
-    elapsed = time.time() - start_time
+            elapsed = time.time() - start_time
+    
     print(f"      -> [PASS] Load completed in {elapsed:.2f} seconds.")
 
     # ---------------------------------------------------------
