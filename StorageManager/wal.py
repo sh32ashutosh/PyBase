@@ -121,3 +121,6 @@ class WALManager:
 
     def __del__(self):
         self.destroy()
+
+if __name__=="__main__":
+    print("running")
