@@ -124,3 +124,5 @@ class WALManager:
 
 if __name__=="__main__":
     print("running")
+    wal=WALManager()
+    
